@@ -1,15 +1,24 @@
+#################################################################
+# Author: Vinh N. Pham
+# Purpose: script to clean up and process StormData
+#################################################################
 
+#----------------------------------------------------------------
+ReadData <- function() {
+   dataSource <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+   dataZip <- "StormData.csv.bz2"
 
-dataSource <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
-dataZip <- "StormData.csv.bz2"
+   if (!file.exists(dataZip)) {
+      download.file(dataSource, dataZip)
+   }
 
-if (!file.exists(dataZip)) {
-   download.file(dataSource, dataZip)
+   read.csv(dataZip, header=TRUE, strip.white = TRUE, na.strings = c("NA","","?"))
 }
 
-data1 <- read.csv(dataZip, header=TRUE, strip.white = TRUE, na.strings = c("NA","","?"))
+rawData <- ReadData()
 
 
+#----------------------------------------------------------------
 Exp2Numeric <- function(x) {
    if (is.na(x)) 0
    else if (x %in% c(0:9)) as.numeric(x)
@@ -20,22 +29,41 @@ Exp2Numeric <- function(x) {
    else 0
 }
 
-data1$PROPDMGVAL <- mapply(FUN=function(x,y) {x*Exp2Numeric(y)}, data1$PROPDMG, data1$PROPDMGEXP)
-data1$CROPDMGVAL <- mapply(FUN=function(x,y) {x*Exp2Numeric(y)}, data1$CROPDMG, data1$CROPDMGEXP)
+#----------------------------------------------------------------
+ComputeDamage <- function(data) {
+      mapply(FUN=function(x,y) {x*Exp2Numeric(y)}, data$PROPDMG, data$PROPDMGEXP) +
+      mapply(FUN=function(x,y) {x*Exp2Numeric(y)}, data$CROPDMG, data$CROPDMGEXP)
+}
 
-require(stringr)
-# data1$EVTYPE <- toupper(str_trim(levels(data1$EVTYPE)[data1$EVTYPE]))  # temporary
 
+rawData$DAMAGE <- ComputeDamage(rawData)
+rawData$EVTYPE[is.na(rawData$EVTYPE)] <- "OTHER"   # adjust one case
+
+#----------------------------------------------------------------
 InitialRemap <- function(x) {
+   require(stringr)   
    result <- toupper(str_trim(x))   # make it all capital
-   result <- gsub('&',replacement="/", result)   # substitute '/' for '&'
+   
+   result <- gsub('&',replacement="/", result)   # substitute '/' for '&'   
    result <-  gsub('\\\\', replacement="/", result)   # substitute '/' for '\'
    result <- gsub('\\sAND\\s',replacement="/", result) # substitute '/' for 'AND'
+   result <- gsub(';',replacement="/", result)   # replace '/' for ';'
    result <- gsub('\\s*\\/\\s*',replacement="/", result)   # remove space on either sides of '/'
+   
    result <- gsub('\\s*-\\s*',replacement="-", result)   # remove space on either sides of '-'
+   ## remove all character '-' that doesn't separate terms so that the only character
+   ## that separate terms are '/'
+   result <- gsub('BLOW-OUT',replacement="BLOWOUT", result)
+   result <- gsub('HURRICANE-GENERATED',replacement="HURRICANE", result)
+   result <- gsub('LAKE-EFFECT',replacement="LAKE EFFECT", result)
+   result <- gsub('LATE-SEASON',replacement="LATE SEASON", result)
+   result <- gsub('NON-',replacement="NON", result)
+   result <- gsub('LATE-SEASON',replacement="LATE SEASON", result)
+   result <- gsub('-',replacement="/", result)
+   
    result <- gsub('\\s+{2}',replacement=" ", result)   # remove redundant space
    result <- gsub('[()]',replacement="", result)
-   result <- gsub(';',replacement="/", result)
+
    result <- sub('\\W+$',replacement="", result)   # remove all non-word at the end
                   
    
@@ -84,7 +112,7 @@ InitialRemap <- function(x) {
    result <- gsub('\\bWILDFIRES\\b', replacement="WILDFIRE", result)
    result <- gsub('\\bTHUNDERSTORMWINDS\\b', replacement="THUNDERSTORM WIND", result)
    
-   result <- gsub('^SUMMARY\\.*', replacement="OTHER", result)
+   result <- gsub('^SUMMARY.*', replacement="OTHER", result)
    result <- gsub('^NONE$', replacement="OTHER", result)
    
    result <- gsub('\\bWINS\\b', replacement="WIND", result)
@@ -95,5 +123,98 @@ InitialRemap <- function(x) {
    
 }
 
-# data1$EVTYPE <- sapply(levels(data1$EVTYPE)[data1$EVTYPE],InitialRemap)
-evtype <- sapply(levels(data1$EVTYPE)[data1$EVTYPE],InitialRemap)
+
+rawData$TYPE <- sapply(levels(rawData$EVTYPE)[rawData$EVTYPE],InitialRemap)
+
+#----------------------------------------------------------------
+SeparateEventType <- function(data) {   
+   evtype <- data$TYPE
+
+   require(reshape2)
+   evtype <- colsplit(evtype,"/",c("TYPE1","TYPE2","TYPE3"))
+   evtype$TYPE2[evtype$TYPE2==""] <- NA
+   evtype$TYPE3[evtype$TYPE3==""] <- NA
+
+   data2 <- data[,c("REFNUM", "BGN_DATE", "FATALITIES","INJURIES", "DAMAGE")]
+   data2 <- cbind(data2, evtype)
+
+   data2 <- melt(data2, measure.vars=c("TYPE1", "TYPE2", "TYPE3"),
+                 value.name="TYPE",
+                 na.rm=TRUE)
+   data2$variable <- NULL
+   row.names(data2) <- NULL
+   
+   data2   # return new clean data
+}
+
+cleanData <- SeparateEventType(rawData)
+
+#----------------------------------------------------------------
+# make the raw map file
+CreateRawMap <- function(data) {
+   rawMapFile <- "RawMap.txt"
+   evnames <- unique(sort(data$TYPE))
+   write(evnames, rawMapFile)
+}
+
+CreateRawMap(cleanData)
+
+#----------------------------------------------------------------
+DetailRemap <- function(data) {
+   remap <- read.table("remap.txt", fill=TRUE,header=TRUE,sep=">",
+                       colClasses=c("character","character"),strip.white=TRUE)
+   
+   RemapEventName <- function(x) {
+      res <- remap$new[remap$original==x]
+      ifelse(res=="",x,res)
+   }
+   sapply(data$TYPE,RemapEventName)
+   
+}
+
+cleanData$TYPE <- DetailRemap(cleanData)
+
+#----------------------------------------------------------------
+# only to create "EventTypeCode.txt" file which is the basis
+# for the MyEventType.md (rearrange in similar categories rather
+# than alphabetically).
+CreateEventTypeCodeFile <- function(data) {
+   typeCodeFile <- "EventTypeCode.txt"
+   typeCode <- unique(sort(data$TYPE))
+   write(typeCode, typeCodeFile)
+}
+
+CreateEventTypeCodeFile(cleanData)
+
+
+#----------------------------------------------------------------
+cleanData$TYPE <- factor(cleanData$TYPE)
+   
+################ SUMMARIES ######################################
+CreateSummaryData <- function(data) {
+   aggregate(data[3:5], by=data["TYPE"],sum)
+}
+
+summaryData <- CreateSummaryData(cleanData)
+
+#----------------------------------------------------------------
+fatalities <- (head(summaryData[order(summaryData$FATALITIES, decreasing=TRUE),
+                                c("TYPE", "FATALITIES")],n=10))
+
+barplot(fatalities[,2], col=rainbow(10), legend=fatalities[,1],
+        main="Fatalities Report")
+
+
+#----------------------------------------------------------------
+injuries <- (head(summaryData[order(summaryData$INJURIES, decreasing=TRUE),
+                                c("TYPE", "INJURIES")],n=10))
+
+barplot(injuries[,2], col=rainbow(10), legend=injuries[,1],
+        main="Injuries Report")
+
+#----------------------------------------------------------------
+damages <- (head(summaryData[order(summaryData$DAMAGE, decreasing=TRUE),
+                                c("TYPE", "DAMAGE")],n=10))
+barplot(damages[,2], col=rainbow(10), legend=damages[,1],
+        main="Damage Report",
+        ylab="Cost in Dollars")

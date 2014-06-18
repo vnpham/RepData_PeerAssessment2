@@ -1,3 +1,5 @@
+# This is the event types suggested by a original data document.  However,
+# it is highly incompleted
 Astronomical Low Tide
 Avalanche
 Blizzard
