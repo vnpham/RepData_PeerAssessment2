@@ -1,7 +1,6 @@
 Casualties and Economic Impacts of Diaster Events from 1950 to 2011
 ==================================================================
 Author: Vinh N. Pham
-<hr/>
 
 ## Synopsis
 Disaster events(storms, tornados, flood, ...) can have significant effects on
